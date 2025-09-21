@@ -220,27 +220,27 @@
     };
 
     function renderMessage(sender, text, time, isMe) {
-      const wrapper = el('div', 'd-flex flex-column');
-      const bubble = el('div', 'bubble');
-      if(isMe) bubble.classList.add('me'); else bubble.classList.add('other');
-      if(!isMe) {
-        const nameEl = el('div', 'fw-bold mb-1'); nameEl.style.fontSize = "13px";
-        nameEl.textContent = sender; bubble.appendChild(nameEl);
-      }
-      const textNode = el('div'); textNode.textContent = text; bubble.appendChild(textNode);
-      const meta = el('div', 'meta');
-      meta.textContent = time || '';
-      if(isMe) {
-        const check = el('span', 'check');
-        check.innerHTML = "✅✅";  // centang biru
-        check.style.color = "#34b7f1";
-        meta.appendChild(check);
-      }
-      bubble.appendChild(meta);
-      wrapper.appendChild(bubble);
-      messagesEl.appendChild(wrapper);
-      scrollToBottom();
-    }
+  const wrapper = el('div', 'd-flex flex-column');
+  const bubble = el('div', 'bubble');
+  if(isMe) bubble.classList.add('me'); else bubble.classList.add('other');
+  if(!isMe) {
+    const nameEl = el('div', 'fw-bold mb-1'); 
+    nameEl.style.fontSize = "13px";
+    nameEl.textContent = sender; 
+    bubble.appendChild(nameEl);
+  }
+  const textNode = el('div'); 
+  textNode.textContent = text; 
+  bubble.appendChild(textNode);
+
+  const meta = el('div', 'meta');
+  meta.textContent = time || '';
+  
+  bubble.appendChild(meta);
+  wrapper.appendChild(bubble);
+  messagesEl.appendChild(wrapper);
+  scrollToBottom();
+}
 
     // tombol emoji (buka panel emoji default browser)
     document.getElementById("emojiBtn").onclick = () => {
