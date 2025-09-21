@@ -192,19 +192,28 @@
     };
 
     async function startChat() {
-      key = await deriveKeyFromRoom(room);
-      roomLabel.textContent = room;
-      menu.classList.add('hidden'); chatUI.classList.remove('hidden');
-      messagesEl.innerHTML = '';
+  key = await deriveKeyFromRoom(room);
+  roomLabel.textContent = room;
+  menu.classList.add('hidden'); 
+  chatUI.classList.remove('hidden');
+  messagesEl.innerHTML = '';
 
-      const msgsRef = ref(db, `rooms/${room}/messages`);
-      onChildAdded(msgsRef, async (snap) => {
-        const d = snap.val();
-        const decrypted = await decryptText(key, d.iv, d.data);
-        const text = (decrypted === null) ? '🔒 Encrypted' : decrypted;
-        renderMessage(d.name, text, d.time, d.name === myName);
-      });
-    }
+  const msgsRef = ref(db, `rooms/${room}/messages`);
+
+  // pesan baru masuk
+  onChildAdded(msgsRef, async (snap) => {
+    const d = snap.val();
+    const decrypted = await decryptText(key, d.iv, d.data);
+    const text = (decrypted === null) ? '🔒 Encrypted' : decrypted;
+    renderMessage(snap.key, d.name, text, d.time, d.name === myName);
+  });
+
+  // pesan dihapus otomatis → langsung hilang dari UI
+  onChildRemoved(msgsRef, (snap) => {
+    const el = document.getElementById("msg-" + snap.key);
+    if (el) el.remove();
+  });
+}
 
     sendBtn.onclick = async () => {
       const txt = inputEl.value.trim();
@@ -219,24 +228,28 @@
       }
     };
 
-    function renderMessage(sender, text, time, isMe) {
+    function renderMessage(id, sender, text, time, isMe) {
   const wrapper = el('div', 'd-flex flex-column');
+  wrapper.id = "msg-" + id; // kasih id biar bisa dihapus nanti
+
   const bubble = el('div', 'bubble');
   if(isMe) bubble.classList.add('me'); else bubble.classList.add('other');
+
   if(!isMe) {
     const nameEl = el('div', 'fw-bold mb-1'); 
     nameEl.style.fontSize = "13px";
     nameEl.textContent = sender; 
     bubble.appendChild(nameEl);
   }
+
   const textNode = el('div'); 
   textNode.textContent = text; 
   bubble.appendChild(textNode);
 
   const meta = el('div', 'meta');
   meta.textContent = time || '';
-  
   bubble.appendChild(meta);
+
   wrapper.appendChild(bubble);
   messagesEl.appendChild(wrapper);
   scrollToBottom();
