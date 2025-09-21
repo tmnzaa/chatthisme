@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>RahasiaChat — Secure Demo</title>
+
+  <!-- Tailwind + Bootstrap -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+
+  <style>
+    body{background:#e5ddd5;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .chat-card{width:100%;max-width:420px;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.12)}
+    .header{background:#075e54;color:white;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+    .messages{background:#f0f0f0;height:60vh;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
+    .bubble{max-width:78%;padding:10px 12px;border-radius:12px;word-wrap:break-word}
+    .me{align-self:flex-end;background:#0b9a6f;color:white;border-bottom-right-radius:4px}
+    .other{align-self:flex-start;background:white;color:#111;border-bottom-left-radius:4px}
+    .meta{font-size:11px;color:rgba(0,0,0,.45);margin-top:6px;text-align:right}
+    .small-muted{font-size:12px;color:rgba(255,255,255,.85)}
+    .room-info{font-size:13px;color:#f4f7f6}
+    .controls{padding:12px;background:white;display:flex;gap:8px;align-items:center}
+    .input{flex:1}
+    @media (max-width:480px){ .messages{height:55vh} }
+  </style>
+</head>
+<body>
+
+  <div class="chat-card bg-white">
+    <!-- MENU (create/join) -->
+    <div id="menu" class="p-4">
+      <h2 class="text-center mb-3" style="color:#075e54">RahasiaChat 🔒</h2>
+
+      <div class="mb-3">
+        <label class="form-label">Nama (alias)</label>
+        <input id="nameCreate" class="form-control" placeholder="Contoh: Rani"/>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Buat Room (kode rahasia)</label>
+        <div class="d-flex gap-2">
+          <input id="roomCreate" class="form-control" placeholder="masukkan kode (contoh: X8J2KQ)"/>
+          <button id="btnGenerate" class="btn btn-outline-secondary">Gen</button>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">Atur pesan ephemeral (detik)</label>
+        <input id="ttlCreate" type="number" class="form-control" placeholder="0 = jangan auto-delete (contoh: 3600)" />
+      </div>
+
+      <div class="d-grid gap-2 mb-3">
+        <button id="btnCreate" class="btn btn-success">Buat Room & Masuk</button>
+      </div>
+
+      <hr/>
+
+      <div class="mb-3">
+        <label class="form-label">Gabung Room</label>
+        <input id="nameJoin" class="form-control mb-2" placeholder="Nama (alias)"/>
+        <input id="roomJoin" class="form-control mb-2" placeholder="Kode Room"/>
+        <div class="d-grid gap-2">
+          <button id="btnJoin" class="btn btn-primary">Gabung</button>
+        </div>
+      </div>
+
+      <p class="text-muted small">Catatan: Demo ini menyimpan pesan di Firebase Realtime Database **dalam bentuk terenkripsi**. Kunci enkripsi berasal dari kode room yang kamu masukkan.</p>
+    </div>
+
+    <!-- CHAT -->
+    <div id="chatUI" class="hidden">
+      <div class="header">
+        <div class="room-info"><strong id="roomLabel">Room</strong></div>
+        <div>
+          <button id="btnLeave" class="btn btn-sm btn-light">Keluar</button>
+        </div>
+      </div>
+
+      <div id="messages" class="messages"></div>
+
+      <div class="controls">
+        <input id="input" class="form-control input" placeholder="Tulis pesan..." />
+        <button id="send" class="btn btn-success">➤</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Firebase + App logic -->
+  <script type="module">
+    // ---------- Firebase SDK ----------
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
+    import { getDatabase, ref, push, onChildAdded, set, get, child, remove } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
+
+    // ----- GANTI DENGAN KONFIG FIREBASE KAMU (sudah kamu berikan sebelumnya) -----
+    const firebaseConfig = {
+      apiKey: "AIzaSyABhufZHFatAQ0U59P0NkJ5hqgfQHugnWQ",
+      authDomain: "chat-ce0ca.firebaseapp.com",
+      databaseURL: "https://chat-ce0ca-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "chat-ce0ca",
+      storageBucket: "chat-ce0ca.firebasestorage.app",
+      messagingSenderId: "1047711938762",
+      appId: "1:1047711938762:web:673f80f5a3615dcb78dc33",
+      measurementId: "G-7BLQCFK16T"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    // ---------- Utilities: Web Crypto (PBKDF2 -> AES-GCM) ----------
+    const enc = (s) => new TextEncoder().encode(s);
+    const dec = (buf) => new TextDecoder().decode(buf);
+    const toBase64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const fromBase64 = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+    async function deriveKeyFromRoom(room, saltSuffix = 'rahasiachat-salt') {
+      // derive key from room code using PBKDF2
+      const pwKey = await crypto.subtle.importKey('raw', enc(room), { name: 'PBKDF2' }, false, ['deriveKey']);
+      const salt = enc(room + ':' + saltSuffix); // room-specific salt (deterministic)
+      const key = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' },
+        pwKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt','decrypt']
+      );
+      return key;
+    }
+
+    async function encryptText(key, plain) {
+      const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit iv
+      const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc(plain));
+      return { iv: toBase64(iv), data: toBase64(cipher) };
+    }
+
+    async function decryptText(key, ivB64, dataB64) {
+      try {
+        const iv = fromBase64(ivB64);
+        const cipher = fromBase64(dataB64);
+        const plainBuf = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, cipher);
+        return dec(plainBuf);
+      } catch (e) {
+        // decryption failed
+        return null;
+      }
+    }
+
+    // ---------- App state ----------
+    let myName = '';
+    let room = '';
+    let key = null;
+    let defaultTTL = 0; // seconds (0 = never auto-delete)
+
+    // ---------- DOM ----------
+    const menu = document.getElementById('menu');
+    const chatUI = document.getElementById('chatUI');
+    const roomLabel = document.getElementById('roomLabel');
+    const messagesEl = document.getElementById('messages');
+    const inputEl = document.getElementById('input');
+    const sendBtn = document.getElementById('send');
+    const btnLeave = document.getElementById('btnLeave');
+
+    // helpers
+    function el(tag, cls) { const d = document.createElement(tag); if(cls) d.className = cls; return d; }
+    function scrollToBottom(){ messagesEl.scrollTop = messagesEl.scrollHeight; }
+
+    // generate small room code
+    document.getElementById('btnGenerate').onclick = () => {
+      const code = Math.random().toString(36).slice(2,8).toUpperCase();
+      document.getElementById('roomCreate').value = code;
+    };
+
+    // CREATE ROOM
+    document.getElementById('btnCreate').onclick = async () => {
+      const name = document.getElementById('nameCreate').value.trim();
+      const roomCode = document.getElementById('roomCreate').value.trim();
+      const ttl = parseInt(document.getElementById('ttlCreate').value || '0', 10);
+      if(!name || !roomCode) return alert('Isi nama & kode room');
+      myName = name; room = roomCode; defaultTTL = Math.max(0, ttl);
+      // create room node
+      await set(ref(db, `rooms/${room}`), { createdBy: name, createdAt: Date.now(), ttlSeconds: defaultTTL });
+      await startChat();
+      localStorage.setItem('rc_name', myName); localStorage.setItem('rc_room', room); localStorage.setItem('rc_ttl', String(defaultTTL));
+    };
+
+    // JOIN ROOM
+    document.getElementById('btnJoin').onclick = async () => {
+      const name = document.getElementById('nameJoin').value.trim();
+      const roomCode = document.getElementById('roomJoin').value.trim();
+      if(!name || !roomCode) return alert('Isi nama & kode room');
+      // check room exists
+      const snap = await get(child(ref(db), `rooms/${roomCode}`));
+      if(!snap.exists()) return alert('Room tidak ditemukan');
+      const val = snap.val();
+      myName = name; room = roomCode; defaultTTL = val.ttlSeconds || 0;
+      localStorage.setItem('rc_name', myName); localStorage.setItem('rc_room', room); localStorage.setItem('rc_ttl', String(defaultTTL));
+      await startChat();
+    };
+
+    // LEAVE
+    btnLeave.onclick = () => {
+      localStorage.removeItem('rc_name'); localStorage.removeItem('rc_room'); localStorage.removeItem('rc_ttl');
+      location.reload();
+    };
+
+    // START CHAT: derive key, hook listener
+    async function startChat() {
+      // derive key from room code
+      key = await deriveKeyFromRoom(room);
+      roomLabel.textContent = room;
+      menu.classList.add('hidden'); chatUI.classList.remove('hidden');
+
+      // mark presence (optional) - for demo we won't maintain presence reliably
+      messagesEl.innerHTML = '';
+
+      // listen for messages (encrypted)
+      const msgsRef = ref(db, `rooms/${room}/messages`);
+      onChildAdded(msgsRef, async (snap) => {
+        const d = snap.val();
+        // Try decrypt
+        const decrypted = await decryptText(key, d.iv, d.data);
+        const text = (decrypted === null) ? '🔒 Pesan terenkripsi (kunci tidak cocok)' : decrypted;
+        // render message
+        renderMessage(d.name, text, d.time, snap.key);
+      });
+    }
+
+    // send message (encrypt then push)
+    sendBtn.onclick = async () => {
+      const txt = inputEl.value.trim();
+      if(!txt) return;
+      inputEl.value = '';
+      const t = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+
+      // encrypt with derived key
+      const encRes = await encryptText(key, txt);
+      const payload = { name: myName, iv: encRes.iv, data: encRes.data, time: t, createdAt: Date.now() };
+      const p = await push(ref(db, `rooms/${room}/messages`), payload);
+
+      // schedule deletion if TTL set
+      const ttl = defaultTTL || 0;
+      if(ttl > 0) {
+        // client-side scheduling: will attempt to delete after ttl seconds
+        // note: this only works if some client remains online to execute removal.
+        setTimeout(async () => {
+          try { await remove(child(ref(db), `rooms/${room}/messages/${p.key}`)); } catch(e){ /* ignore */ }
+        }, ttl * 1000);
+      }
+    };
+
+    // render message bubble
+    function renderMessage(sender, text, time, messageKey) {
+      const wrapper = el('div', 'd-flex flex-column');
+      const bubble = el('div', 'bubble p-2');
+      if(sender === myName) bubble.classList.add('me'); else bubble.classList.add('other');
+      // name for others
+      if(sender !== myName) {
+        const nameEl = el('div', 'text-sm fw-bold mb-1'); nameEl.textContent = sender; bubble.appendChild(nameEl);
+      }
+      const textNode = el('div'); textNode.textContent = text; bubble.appendChild(textNode);
+      const meta = el('div', 'meta'); meta.textContent = time || '';
+      bubble.appendChild(meta);
+      wrapper.appendChild(bubble);
+
+      messagesEl.appendChild(wrapper);
+      scrollToBottom();
+    }
+
+    // auto-resume if info in localStorage
+    (async () => {
+      const savedName = localStorage.getItem('rc_name');
+      const savedRoom = localStorage.getItem('rc_room');
+      const savedTTL = parseInt(localStorage.getItem('rc_ttl') || '0', 10);
+      if(savedName && savedRoom) {
+        // attempt auto-join (derive key & start listener)
+        myName = savedName; room = savedRoom; defaultTTL = savedTTL;
+        try { await startChat(); } catch(e) { console.error(e); }
+      }
+    })();
+  </script>
+</body>
+</html>
