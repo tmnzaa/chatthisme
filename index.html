@@ -11,26 +11,27 @@
 
   <style>
     body{background:#e5ddd5;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
-    .chat-card{width:100%;max-width:420px;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.12)}
+    .chat-card{width:100%;max-width:430px;border-radius:20px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.15)}
     .header{background:#075e54;color:white;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
-    .messages{background:#f0f0f0;height:60vh;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
-    .bubble{max-width:78%;padding:10px 12px;border-radius:12px;word-wrap:break-word}
-    .me{align-self:flex-end;background:#0b9a6f;color:white;border-bottom-right-radius:4px}
-    .other{align-self:flex-start;background:white;color:#111;border-bottom-left-radius:4px}
-    .meta{font-size:11px;color:rgba(0,0,0,.45);margin-top:6px;text-align:right}
-    .small-muted{font-size:12px;color:rgba(255,255,255,.85)}
-    .room-info{font-size:13px;color:#f4f7f6}
-    .controls{padding:12px;background:white;display:flex;gap:8px;align-items:center}
-    .input{flex:1}
+    .messages{background:#ece5dd;height:60vh;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+    .bubble{max-width:75%;padding:10px 14px;border-radius:18px;word-wrap:break-word;position:relative}
+    .me{align-self:flex-end;background:#dcf8c6;border-bottom-right-radius:6px}
+    .other{align-self:flex-start;background:white;border-bottom-left-radius:6px}
+    .meta{font-size:11px;color:rgba(0,0,0,.45);margin-top:4px;text-align:right;display:flex;align-items:center;justify-content:flex-end;gap:3px}
+    .room-info{font-size:15px;color:#f4f7f6}
+    .controls{padding:12px;background:white;display:flex;gap:8px;align-items:center;border-top:1px solid #ddd}
+    .input{flex:1;border-radius:20px !important;padding-left:15px}
+    .emoji-btn{background:none;border:none;font-size:22px;cursor:pointer}
+    .check{font-size:14px}
     @media (max-width:480px){ .messages{height:55vh} }
   </style>
 </head>
 <body>
 
   <div class="chat-card bg-white">
-    <!-- MENU (create/join) -->
+    <!-- MENU -->
     <div id="menu" class="p-4">
-      <h2 class="text-center mb-3" style="color:#075e54">RahasiaChat 🔒</h2>
+      <h2 class="text-center mb-3" style="color:#075e54;font-weight:bold">RahasiaChat 🔒</h2>
 
       <div class="mb-3">
         <label class="form-label">Nama (alias)</label>
@@ -40,7 +41,7 @@
       <div class="mb-3">
         <label class="form-label">Buat Room (kode rahasia)</label>
         <div class="d-flex gap-2">
-          <input id="roomCreate" class="form-control" placeholder="masukkan kode (contoh: X8J2KQ)"/>
+          <input id="roomCreate" class="form-control" placeholder="contoh: X8J2KQ"/>
           <button id="btnGenerate" class="btn btn-outline-secondary">Gen</button>
         </div>
       </div>
@@ -65,13 +66,16 @@
         </div>
       </div>
 
-      <p class="text-muted small">Catatan: Demo ini menyimpan pesan di Firebase Realtime Database **dalam bentuk terenkripsi**. Kunci enkripsi berasal dari kode room yang kamu masukkan.</p>
+      <p class="text-muted small">Catatan: Pesan terenkripsi di Firebase, kunci berasal dari kode room 🔑.</p>
     </div>
 
     <!-- CHAT -->
     <div id="chatUI" class="hidden">
       <div class="header">
-        <div class="room-info"><strong id="roomLabel">Room</strong></div>
+        <div class="room-info">
+          <strong id="roomLabel">Room</strong><br>
+          <span class="small-muted" id="statusOnline">🟢 Online</span>
+        </div>
         <div>
           <button id="btnLeave" class="btn btn-sm btn-light">Keluar</button>
         </div>
@@ -80,6 +84,7 @@
       <div id="messages" class="messages"></div>
 
       <div class="controls">
+        <button class="emoji-btn" id="emojiBtn">😊</button>
         <input id="input" class="form-control input" placeholder="Tulis pesan..." />
         <button id="send" class="btn btn-success">➤</button>
       </div>
@@ -88,11 +93,9 @@
 
   <!-- Firebase + App logic -->
   <script type="module">
-    // ---------- Firebase SDK ----------
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
     import { getDatabase, ref, push, onChildAdded, set, get, child, remove } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
 
-    // ----- GANTI DENGAN KONFIG FIREBASE KAMU (sudah kamu berikan sebelumnya) -----
     const firebaseConfig = {
       apiKey: "AIzaSyABhufZHFatAQ0U59P0NkJ5hqgfQHugnWQ",
       authDomain: "chat-ce0ca.firebaseapp.com",
@@ -107,16 +110,14 @@
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
 
-    // ---------- Utilities: Web Crypto (PBKDF2 -> AES-GCM) ----------
     const enc = (s) => new TextEncoder().encode(s);
     const dec = (buf) => new TextDecoder().decode(buf);
     const toBase64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
     const fromBase64 = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
-    async function deriveKeyFromRoom(room, saltSuffix = 'rahasiachat-salt') {
-      // derive key from room code using PBKDF2
+    async function deriveKeyFromRoom(room) {
       const pwKey = await crypto.subtle.importKey('raw', enc(room), { name: 'PBKDF2' }, false, ['deriveKey']);
-      const salt = enc(room + ':' + saltSuffix); // room-specific salt (deterministic)
+      const salt = enc(room + ':rahasiachat-salt');
       const key = await crypto.subtle.deriveKey(
         { name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' },
         pwKey,
@@ -128,7 +129,7 @@
     }
 
     async function encryptText(key, plain) {
-      const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit iv
+      const iv = crypto.getRandomValues(new Uint8Array(12));
       const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc(plain));
       return { iv: toBase64(iv), data: toBase64(cipher) };
     }
@@ -139,19 +140,13 @@
         const cipher = fromBase64(dataB64);
         const plainBuf = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, cipher);
         return dec(plainBuf);
-      } catch (e) {
-        // decryption failed
+      } catch {
         return null;
       }
     }
 
-    // ---------- App state ----------
-    let myName = '';
-    let room = '';
-    let key = null;
-    let defaultTTL = 0; // seconds (0 = never auto-delete)
+    let myName = '', room = '', key = null, defaultTTL = 0;
 
-    // ---------- DOM ----------
     const menu = document.getElementById('menu');
     const chatUI = document.getElementById('chatUI');
     const roomLabel = document.getElementById('roomLabel');
@@ -160,35 +155,29 @@
     const sendBtn = document.getElementById('send');
     const btnLeave = document.getElementById('btnLeave');
 
-    // helpers
     function el(tag, cls) { const d = document.createElement(tag); if(cls) d.className = cls; return d; }
     function scrollToBottom(){ messagesEl.scrollTop = messagesEl.scrollHeight; }
 
-    // generate small room code
     document.getElementById('btnGenerate').onclick = () => {
       const code = Math.random().toString(36).slice(2,8).toUpperCase();
       document.getElementById('roomCreate').value = code;
     };
 
-    // CREATE ROOM
     document.getElementById('btnCreate').onclick = async () => {
       const name = document.getElementById('nameCreate').value.trim();
       const roomCode = document.getElementById('roomCreate').value.trim();
       const ttl = parseInt(document.getElementById('ttlCreate').value || '0', 10);
       if(!name || !roomCode) return alert('Isi nama & kode room');
       myName = name; room = roomCode; defaultTTL = Math.max(0, ttl);
-      // create room node
       await set(ref(db, `rooms/${room}`), { createdBy: name, createdAt: Date.now(), ttlSeconds: defaultTTL });
       await startChat();
       localStorage.setItem('rc_name', myName); localStorage.setItem('rc_room', room); localStorage.setItem('rc_ttl', String(defaultTTL));
     };
 
-    // JOIN ROOM
     document.getElementById('btnJoin').onclick = async () => {
       const name = document.getElementById('nameJoin').value.trim();
       const roomCode = document.getElementById('roomJoin').value.trim();
       if(!name || !roomCode) return alert('Isi nama & kode room');
-      // check room exists
       const snap = await get(child(ref(db), `rooms/${roomCode}`));
       if(!snap.exists()) return alert('Room tidak ditemukan');
       const val = snap.val();
@@ -197,82 +186,73 @@
       await startChat();
     };
 
-    // LEAVE
     btnLeave.onclick = () => {
-      localStorage.removeItem('rc_name'); localStorage.removeItem('rc_room'); localStorage.removeItem('rc_ttl');
+      localStorage.clear();
       location.reload();
     };
 
-    // START CHAT: derive key, hook listener
     async function startChat() {
-      // derive key from room code
       key = await deriveKeyFromRoom(room);
       roomLabel.textContent = room;
       menu.classList.add('hidden'); chatUI.classList.remove('hidden');
-
-      // mark presence (optional) - for demo we won't maintain presence reliably
       messagesEl.innerHTML = '';
 
-      // listen for messages (encrypted)
       const msgsRef = ref(db, `rooms/${room}/messages`);
       onChildAdded(msgsRef, async (snap) => {
         const d = snap.val();
-        // Try decrypt
         const decrypted = await decryptText(key, d.iv, d.data);
-        const text = (decrypted === null) ? '🔒 Pesan terenkripsi (kunci tidak cocok)' : decrypted;
-        // render message
-        renderMessage(d.name, text, d.time, snap.key);
+        const text = (decrypted === null) ? '🔒 Encrypted' : decrypted;
+        renderMessage(d.name, text, d.time, d.name === myName);
       });
     }
 
-    // send message (encrypt then push)
     sendBtn.onclick = async () => {
       const txt = inputEl.value.trim();
       if(!txt) return;
       inputEl.value = '';
       const t = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-
-      // encrypt with derived key
       const encRes = await encryptText(key, txt);
       const payload = { name: myName, iv: encRes.iv, data: encRes.data, time: t, createdAt: Date.now() };
       const p = await push(ref(db, `rooms/${room}/messages`), payload);
-
-      // schedule deletion if TTL set
-      const ttl = defaultTTL || 0;
-      if(ttl > 0) {
-        // client-side scheduling: will attempt to delete after ttl seconds
-        // note: this only works if some client remains online to execute removal.
-        setTimeout(async () => {
-          try { await remove(child(ref(db), `rooms/${room}/messages/${p.key}`)); } catch(e){ /* ignore */ }
-        }, ttl * 1000);
+      if(defaultTTL > 0) {
+        setTimeout(async () => { try { await remove(child(ref(db), `rooms/${room}/messages/${p.key}`)); } catch{} }, defaultTTL * 1000);
       }
     };
 
-    // render message bubble
-    function renderMessage(sender, text, time, messageKey) {
+    function renderMessage(sender, text, time, isMe) {
       const wrapper = el('div', 'd-flex flex-column');
-      const bubble = el('div', 'bubble p-2');
-      if(sender === myName) bubble.classList.add('me'); else bubble.classList.add('other');
-      // name for others
-      if(sender !== myName) {
-        const nameEl = el('div', 'text-sm fw-bold mb-1'); nameEl.textContent = sender; bubble.appendChild(nameEl);
+      const bubble = el('div', 'bubble');
+      if(isMe) bubble.classList.add('me'); else bubble.classList.add('other');
+      if(!isMe) {
+        const nameEl = el('div', 'fw-bold mb-1'); nameEl.style.fontSize = "13px";
+        nameEl.textContent = sender; bubble.appendChild(nameEl);
       }
       const textNode = el('div'); textNode.textContent = text; bubble.appendChild(textNode);
-      const meta = el('div', 'meta'); meta.textContent = time || '';
+      const meta = el('div', 'meta');
+      meta.textContent = time || '';
+      if(isMe) {
+        const check = el('span', 'check');
+        check.innerHTML = "✅✅";  // centang biru
+        check.style.color = "#34b7f1";
+        meta.appendChild(check);
+      }
       bubble.appendChild(meta);
       wrapper.appendChild(bubble);
-
       messagesEl.appendChild(wrapper);
       scrollToBottom();
     }
 
-    // auto-resume if info in localStorage
+    // tombol emoji (buka panel emoji default browser)
+    document.getElementById("emojiBtn").onclick = () => {
+      inputEl.focus();
+      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    };
+
     (async () => {
       const savedName = localStorage.getItem('rc_name');
       const savedRoom = localStorage.getItem('rc_room');
       const savedTTL = parseInt(localStorage.getItem('rc_ttl') || '0', 10);
       if(savedName && savedRoom) {
-        // attempt auto-join (derive key & start listener)
         myName = savedName; room = savedRoom; defaultTTL = savedTTL;
         try { await startChat(); } catch(e) { console.error(e); }
       }
